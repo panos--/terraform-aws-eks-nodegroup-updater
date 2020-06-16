@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  EKS Nodegroup Updater
+
+  State machine for applying updates to EKS managed nodegroups
+
+Parameters: 
+  ClusterName: 
+    Type: String
+    Default: eks-itop01
+    AllowedValues: 
+      - eks-itop01
+  ErrorNotificationSNSTopicName:
+    Type: String
+    Default: standard-alerts
+
+  SNSTopicKMSKeyId:
+    Type: String
+    Default: 3eb60c60-8fb7-482a-9747-f3dda39a71b8
+
+Globals:
+  Function:
+    Handler: app.lambda_handler
+    Runtime: python3.8
+    MemorySize: 128
+    Timeout: 10
+
+Resources:
+  EKSNodegroupUpdaterStateMachine:
+    Type: AWS::Serverless::StateMachine # More info about State Machine Resource: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-statemachine.html
+    Properties:
+      DefinitionUri: statemachine/nodegroup_updater.asl.json
+      DefinitionSubstitutions:
+        ErrorNotificationSNSTopicArn: !Sub arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${ErrorNotificationSNSTopicName}
+        GetNodegroupsNeedingUpdateFunctionArn: !GetAtt GetNodegroupsNeedingUpdateFunction.Arn
+        UpdateNodegroupFunctionArn: !GetAtt UpdateNodegroupFunction.Arn
+        GetNodegroupUpdateStatusFunctionArn: !GetAtt GetNodegroupUpdateStatusFunction.Arn
+        ClusterName: !Sub '${ClusterName}'
+      Policies: # Find out more about SAM policy templates: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-policy-templates.html
+        - LambdaInvokePolicy:
+            FunctionName: !Ref GetNodegroupsNeedingUpdateFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref UpdateNodegroupFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref GetNodegroupUpdateStatusFunction
+        - Statement:
+          - Action:
+            - sns:Publish
+            Effect: Allow
+            Resource: !Sub arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${ErrorNotificationSNSTopicName}
+          - Action:
+            - kms:Encrypt
+            - kms:Decrypt
+            - kms:ReEncrypt*
+            - kms:GenerateDataKey*
+            - kms:DescribeKey
+            Effect: Allow
+            Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/${SNSTopicKMSKeyId}
+          - Action:
+            - logs:CreateLogDelivery
+            - logs:DeleteLogDelivery
+            - logs:DescribeLogGroups
+            - logs:DescribeResourcePolicies
+            - logs:GetLogDelivery
+            - logs:ListLogDeliveries
+            - logs:PutResourcePolicy
+            - logs:UpdateLogDelivery
+            Effect: Allow
+            Resource: '*'
+      Logging:
+        Destinations:
+        - CloudWatchLogsLogGroup:
+            LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+
+  GetNodegroupsNeedingUpdateFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+    Properties:
+      CodeUri: functions/get_updatable_nodegroups/
+      Timeout: 30
+      Policies: &LambdaFunctionPolicies
+      - Statement:
+        - Action:
+          - eks:DescribeCluster
+          - eks:ListNodegroups
+          Effect: Allow
+          Resource: !Sub 'arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}'
+        - Action:
+          - eks:DescribeNodegroup
+          - eks:UpdateNodegroupVersion
+          Effect: Allow
+          Resource: !Sub 'arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:nodegroup/${ClusterName}/*'
+        - Action:
+          - eks:DescribeUpdate
+          Effect: Allow
+          Resource:
+          - !Sub 'arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}/*'
+          - !Sub 'arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:nodegroup/${ClusterName}/*'
+        - Action:
+          - ssm:GetParameter
+          Effect: Allow
+          Resource:
+          - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}::parameter/aws/service/eks/*
+          - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/aws/service/eks/*
+
+  UpdateNodegroupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/update_nodegroup/
+      Policies: *LambdaFunctionPolicies
+
+  GetNodegroupUpdateStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/get_nodegroup_update_status/
+      Policies: *LambdaFunctionPolicies
+  
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/states/EKSNodegroupUpdaterStateMachine-eks-itop01-logs
+      RetentionInDays: 30
+
+Outputs:
+  EKSNodegroupUpdaterArn:
+    Description: "EKS Nodegroup Updater state machine ARN"
+    Value: !Ref EKSNodegroupUpdaterStateMachine
+  EKSNodegroupUpdaterStateMachineRoleArn:
+    Description: "IAM Role created for EKS Nodegroup Updater state machine based on the specified SAM Policy Templates"
+    Value: !GetAtt EKSNodegroupUpdaterStateMachineRole.Arn

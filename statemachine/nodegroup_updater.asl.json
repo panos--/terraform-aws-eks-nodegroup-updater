@@ -1,0 +1,212 @@
+{
+    "Comment": "A state machine for updating EKS managed nodegroups.",
+    "StartAt": "GetNodegroupsNeedingUpdate",
+    "States": {
+        "GetNodegroupsNeedingUpdate": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+                "FunctionName": "${GetNodegroupsNeedingUpdateFunctionArn}",
+                "Payload": {
+                    "cluster_name": "${ClusterName}"
+                }
+            },
+            "TimeoutSeconds": 300,
+            "HeartbeatSeconds": 60,
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "Lambda.ServiceException",
+                        "Lambda.AWSLambdaException",
+                        "Lambda.SdkClientException"
+                    ],
+                    "IntervalSeconds": 2,
+                    "MaxAttempts": 6,
+                    "BackoffRate": 2
+                 }
+            ],
+            "Catch": [
+                { 
+                    "ErrorEquals": ["States.ALL"], 
+                    "Next": "SendExecutionErrorNotification", 
+                    "ResultPath": "$.error" 
+                }
+            ],
+            "ResultPath": "$.nodegroupsResult",
+            "Next": "UpdateNodegroups"
+        },
+        "UpdateNodegroups": {
+            "Type": "Map",
+            "ItemsPath": "$.nodegroupsResult.Payload",
+            "MaxConcurrency": 1,
+            "Parameters": {
+                "cluster_name": "${ClusterName}",
+                "nodegroup.$": "$$.Map.Item.Value"
+            },
+            "Iterator": {
+                "StartAt": "UpdateNodegroup",
+                "States": {
+                    "UpdateNodegroup": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::lambda:invoke",
+                        "Parameters": {
+                            "FunctionName": "${UpdateNodegroupFunctionArn}",
+                            "Payload": {
+                                "cluster_name.$": "$.cluster_name",
+                                "nodegroup.$": "$.nodegroup"
+                            }
+                        },
+                        "TimeoutSeconds": 300,
+                        "HeartbeatSeconds": 60,
+                        "Retry": [
+                            {
+                                "ErrorEquals": [
+                                    "Lambda.ServiceException",
+                                    "Lambda.AWSLambdaException",
+                                    "Lambda.SdkClientException"
+                                ],
+                                "IntervalSeconds": 2,
+                                "MaxAttempts": 6,
+                                "BackoffRate": 2
+                             }
+                        ],
+                        "Catch": [
+                            { 
+                                "ErrorEquals": ["States.ALL"], 
+                                "Next": "Error", 
+                                "ResultPath": "$.error" 
+                            }
+                        ],
+                        "ResultPath": "$.updateResult",
+                        "Next": "GetUpdateStatus"
+                    },
+                    "GetUpdateStatus": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::lambda:invoke",
+                        "Parameters": {
+                            "FunctionName": "${GetNodegroupUpdateStatusFunctionArn}",
+                            "Payload": {
+                                "cluster_name.$": "$.cluster_name",
+                                "nodegroup.$": "$.nodegroup",
+                                "update_id.$": "$.updateResult.Payload"
+                            }
+                        },
+                        "TimeoutSeconds": 300,
+                        "HeartbeatSeconds": 60,
+                        "Retry": [
+                            {
+                                "ErrorEquals": [
+                                    "Lambda.ServiceException",
+                                    "Lambda.AWSLambdaException",
+                                    "Lambda.SdkClientException"
+                                ],
+                                "IntervalSeconds": 2,
+                                "MaxAttempts": 6,
+                                "BackoffRate": 2
+                             }
+                        ],
+                        "Catch": [
+                            { 
+                                "ErrorEquals": ["States.ALL"], 
+                                "Next": "Error", 
+                                "ResultPath": "$.error" 
+                            }
+                        ],
+                        "ResultPath": "$.updateStatusResult",
+                        "Next": "CheckUpdateStatus"
+                    },
+                    "CheckUpdateStatus": {
+                        "Type": "Choice",
+                        "Choices": [
+                            {
+                                "Variable": "$.updateStatusResult.Payload.status",
+                                "StringEquals": "InProgress",
+                                "Next": "Wait"
+                            },
+                            {
+                                "Variable": "$.updateStatusResult.Payload.status",
+                                "StringEquals": "Successful",
+                                "Next": "Success"
+                            }
+                        ],
+                        "Default": "SendUpdateErrorNotification"
+                    },
+                    "Wait": {
+                        "Type": "Wait",
+                        "Seconds": 10,
+                        "Next": "GetUpdateStatus"
+                    },
+                    "Success": {
+                        "Type": "Succeed"
+                    },
+                    "SendUpdateErrorNotification": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::sns:publish",
+                        "Parameters": {
+                            "TopicArn": "${ErrorNotificationSNSTopicArn}",
+                            "Message.$": "$.updateStatusResult.Payload.errors",
+                            "Subject": "Error: ${ClusterName}: Nodegroup update failed"
+                        },
+                        "TimeoutSeconds": 300,
+                        "HeartbeatSeconds": 60,
+                        "Retry": [
+                            {
+                                "ErrorEquals": [
+                                    "States.ALL"
+                                ],
+                                "IntervalSeconds": 2,
+                                "MaxAttempts": 6,
+                                "BackoffRate": 2
+                            }
+                        ],
+                        "Next": "Failure"
+                    },
+                    "Failure": {
+                        "Error": "NodegroupUpdateFailed",
+                        "Type": "Fail"
+                    },
+                    "Error": {
+                        "Type": "Fail"
+                    }
+                }
+            },
+            "Catch": [
+                {
+                    "ErrorEquals": ["NodegroupUpdateFailed"],
+                    "Next": "ErrorExit"
+                },
+                { 
+                    "ErrorEquals": ["States.ALL"], 
+                    "Next": "SendExecutionErrorNotification", 
+                    "ResultPath": "$.error" 
+                }
+            ],
+            "End": true
+        },
+        "SendExecutionErrorNotification": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+                "TopicArn": "${ErrorNotificationSNSTopicArn}",
+                "Message.$": "$.error",
+                "Subject": "Error: ${ClusterName}: Nodegroup updater execution failed"
+            },
+            "TimeoutSeconds": 300,
+            "HeartbeatSeconds": 60,
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "IntervalSeconds": 2,
+                    "MaxAttempts": 6,
+                    "BackoffRate": 2
+                 }
+            ],
+            "Next": "ErrorExit"
+        },
+        "ErrorExit": {
+            "Type": "Fail"
+        }
+    }
+}
