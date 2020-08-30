@@ -4,7 +4,7 @@
 terraform {
   required_version = ">= 0.12"
   required_providers {
-    aws = "~> 2.60"
+    aws = ">= 2.60, < 4.0"
     archive = "~> 1.3"
   }
 }
