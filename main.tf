@@ -193,6 +193,16 @@ data "aws_iam_policy_document" "lambda" {
       "arn:aws:ssm:${local.region}:${local.account_id}:parameter/aws/service/eks/*",
     ]
   }
+
+  statement {
+    actions = [
+      "ec2:DescribeLaunchTemplates",
+      "ec2:DescribeLaunchTemplateVersions",
+      "ec2:RunInstances",
+      "ec2:CreateTags",
+    ]
+    resources = ["*"]
+  }
 }
 
 ## CloudWatch Event Rule (Schedule)
