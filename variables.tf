@@ -8,7 +8,7 @@ variable "schedule" {
 }
 
 variable "schedule_enabled" {
-  type = bool
+  type    = bool
   default = true
 }
 

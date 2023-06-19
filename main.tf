@@ -4,7 +4,7 @@
 terraform {
   required_version = ">= 0.12"
   required_providers {
-    aws = ">= 2.60, < 4.0"
+    aws     = ">= 2.60, < 4.0"
     archive = "~> 1.3"
   }
 }
@@ -13,21 +13,21 @@ data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
 
 locals {
-  region = data.aws_region.current.name
+  region     = data.aws_region.current.name
   account_id = data.aws_caller_identity.current.account_id
 }
 
 ## State Machine
 
 resource "aws_sfn_state_machine" "this" {
-  name = "eks-nodegroup-updater-${var.cluster_name}"
+  name     = "eks-nodegroup-updater-${var.cluster_name}"
   role_arn = aws_iam_role.sfn.arn
   definition = templatefile("${path.module}/statemachine/nodegroup_updater.asl.json", {
-    ClusterName = var.cluster_name
+    ClusterName                           = var.cluster_name
     GetNodegroupsNeedingUpdateFunctionArn = aws_lambda_function.lambda["get_updatable_nodegroups"].arn
-    UpdateNodegroupFunctionArn = aws_lambda_function.lambda["update_nodegroup"].arn
-    GetNodegroupUpdateStatusFunctionArn = aws_lambda_function.lambda["get_nodegroup_update_status"].arn
-    ErrorNotificationSNSTopicArn = var.error_notification_sns_topic_arn
+    UpdateNodegroupFunctionArn            = aws_lambda_function.lambda["update_nodegroup"].arn
+    GetNodegroupUpdateStatusFunctionArn   = aws_lambda_function.lambda["get_nodegroup_update_status"].arn
+    ErrorNotificationSNSTopicArn          = var.error_notification_sns_topic_arn
   })
 }
 
@@ -43,15 +43,15 @@ data "aws_iam_policy_document" "sfn_assume_role" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
-      type = "Service"
+      type        = "Service"
       identifiers = ["states.amazonaws.com"]
     }
   }
 }
 
 resource "aws_iam_role_policy" "sfn" {
-  name = "policy"
-  role = aws_iam_role.sfn.id
+  name   = "policy"
+  role   = aws_iam_role.sfn.id
   policy = data.aws_iam_policy_document.sfn.json
 }
 
@@ -66,7 +66,7 @@ data "aws_iam_policy_document" "sfn" {
   }
 
   statement {
-    actions = ["sns:Publish"]
+    actions   = ["sns:Publish"]
     resources = [var.error_notification_sns_topic_arn]
   }
 
@@ -107,32 +107,32 @@ locals {
 }
 
 resource "aws_lambda_function" "lambda" {
-  for_each = local.lambdas
-  filename = data.archive_file.lambda[each.key].output_path
-  function_name = "${replace(each.key, "_", "-")}-${var.cluster_name}"
+  for_each         = local.lambdas
+  filename         = data.archive_file.lambda[each.key].output_path
+  function_name    = "${replace(each.key, "_", "-")}-${var.cluster_name}"
   source_code_hash = data.archive_file.lambda[each.key].output_base64sha256
-  role = aws_iam_role.lambda.arn
-  handler = "app.lambda_handler"
-  runtime = "python3.8"
-  memory_size = 128
-  timeout = 10
+  role             = aws_iam_role.lambda.arn
+  handler          = "app.lambda_handler"
+  runtime          = "python3.8"
+  memory_size      = 128
+  timeout          = 10
 }
 
 data "archive_file" "lambda" {
-  for_each = local.lambdas
-  type = "zip"
+  for_each    = local.lambdas
+  type        = "zip"
   output_path = "${path.module}/build/${each.key}.zip"
-  source_dir = "${path.module}/functions/${each.key}"
+  source_dir  = "${path.module}/functions/${each.key}"
 }
 
 resource "aws_cloudwatch_log_group" "lambda" {
-  for_each = local.lambdas
-  name = "/aws/lambda/${aws_lambda_function.lambda[each.key].function_name}"
+  for_each          = local.lambdas
+  name              = "/aws/lambda/${aws_lambda_function.lambda[each.key].function_name}"
   retention_in_days = 30
 }
 
 resource "aws_iam_role" "lambda" {
-  name = "eks-nodegroup-updater-lambda-${var.cluster_name}"
+  name               = "eks-nodegroup-updater-lambda-${var.cluster_name}"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
 }
 
@@ -140,20 +140,20 @@ data "aws_iam_policy_document" "lambda_assume_role" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
-      type = "Service"
+      type        = "Service"
       identifiers = ["lambda.amazonaws.com"]
     }
   }
 }
 
 resource "aws_iam_role_policy_attachment" "lambda" {
-  role = aws_iam_role.lambda.name
+  role       = aws_iam_role.lambda.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_iam_role_policy" "lambda" {
-  name = "policy"
-  role = aws_iam_role.lambda.name
+  name   = "policy"
+  role   = aws_iam_role.lambda.name
   policy = data.aws_iam_policy_document.lambda.json
 }
 
@@ -212,22 +212,22 @@ locals {
 }
 
 resource "aws_cloudwatch_event_rule" "this" {
-  count = local.create_event ? 1 : 0
-  name = "eks-nodegroup-updater-${var.cluster_name}"
+  count               = local.create_event ? 1 : 0
+  name                = "eks-nodegroup-updater-${var.cluster_name}"
   schedule_expression = var.schedule
-  is_enabled = var.schedule_enabled
+  is_enabled          = var.schedule_enabled
 }
 
 resource "aws_cloudwatch_event_target" "this" {
-  count = local.create_event ? 1 : 0
-  rule = aws_cloudwatch_event_rule.this[0].id
-  arn = aws_sfn_state_machine.this.id
+  count    = local.create_event ? 1 : 0
+  rule     = aws_cloudwatch_event_rule.this[0].id
+  arn      = aws_sfn_state_machine.this.id
   role_arn = aws_iam_role.event[0].arn
 }
 
 resource "aws_iam_role" "event" {
-  count = local.create_event ? 1 : 0
-  name = "eks-nodegorup-updater-event-${var.cluster_name}"
+  count              = local.create_event ? 1 : 0
+  name               = "eks-nodegorup-updater-event-${var.cluster_name}"
   assume_role_policy = data.aws_iam_policy_document.event_assume_role[0].json
 }
 
@@ -252,8 +252,8 @@ data "aws_iam_policy_document" "event_assume_role" {
 resource "aws_iam_role_policy" "event" {
   count = local.create_event ? 1 : 0
 
-  name = "ExecuteStateMachine"
-  role = aws_iam_role.event[0].id
+  name   = "ExecuteStateMachine"
+  role   = aws_iam_role.event[0].id
   policy = data.aws_iam_policy_document.event_policy[0].json
 }
 
@@ -261,7 +261,7 @@ data "aws_iam_policy_document" "event_policy" {
   count = local.create_event ? 1 : 0
 
   statement {
-    actions = ["states:StartExecution"]
+    actions   = ["states:StartExecution"]
     resources = [aws_sfn_state_machine.this.id]
   }
 }
