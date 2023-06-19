@@ -119,10 +119,11 @@ resource "aws_lambda_function" "lambda" {
 }
 
 data "archive_file" "lambda" {
-  for_each    = local.lambdas
-  type        = "zip"
-  output_path = "${path.module}/build/${each.key}.zip"
-  source_dir  = "${path.module}/functions/${each.key}"
+  for_each         = local.lambdas
+  type             = "zip"
+  output_path      = "${path.module}/build/${each.key}.zip"
+  output_file_mode = "0644"
+  source_dir       = "${path.module}/functions/${each.key}"
 }
 
 resource "aws_cloudwatch_log_group" "lambda" {
