@@ -113,7 +113,7 @@ resource "aws_lambda_function" "lambda" {
   source_code_hash = data.archive_file.lambda[each.key].output_base64sha256
   role             = aws_iam_role.lambda.arn
   handler          = "app.lambda_handler"
-  runtime          = "python3.8"
+  runtime          = "python3.12"
   memory_size      = 128
   timeout          = 10
 }
